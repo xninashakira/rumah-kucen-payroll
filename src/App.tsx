@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
 // ── Supabase ──────────────────────────────────────────────────────────────────
-const SUPABASE_URL = "https://wtouazgqnnqlxauuevxn.supabase.co";
-const SUPABASE_ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind0b3Vhemdxbm5xbHhhdXVldnhuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg1MDI3MzIsImV4cCI6MjA2NDA3ODczMn0.gWBawhGHsQHgSJ_0A4jO8L_v1QjMGRCQCuBqZHr1Olw";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string;
 
 async function sb(
   method: string,
@@ -44,7 +43,7 @@ const STAFF_NAME = "Eman";
 const NOTE_OPTIONS = ["Payout", "Advance", "Borrow", "Bonus"];
 const ADMIN_PIN = "1234";
 const VACUUM_RATE = 60;
-const DEEPCLEAN_RATE = 120;
+const DEEPCLEAN_RATE = 180;
 
 const ALYA_COLOR = "#7c3aed";
 const ALYA_BG = "#faf5ff";
@@ -544,6 +543,8 @@ interface VacuumEntry {
   friday_date: string;
   paid: boolean;
   paid_date: string | null;
+  partial: boolean;
+  remark: string;
 }
 
 interface DeepCleanEntry {
@@ -551,9 +552,17 @@ interface DeepCleanEntry {
   for_month: string;
   paid: boolean;
   paid_date: string | null;
+  partial: boolean;
+  remark: string;
 }
 
 // ── Cleaning Page ─────────────────────────────────────────────────────────────
+function entryBg(paid: boolean, partial: boolean) {
+  if (paid) return "#f0fdf4";
+  if (partial) return "#fffbeb";
+  return "#ffffff";
+}
+
 function CleaningPage({ isAdmin }: { isAdmin: boolean }) {
   const [tab, setTab] = useState<"vacuum" | "deep">("vacuum");
   const [vacuums, setVacuums] = useState<VacuumEntry[]>([]);
@@ -567,14 +576,18 @@ function CleaningPage({ isAdmin }: { isAdmin: boolean }) {
   const [editVac, setEditVac] = useState<VacuumEntry | null>(null);
   const [vacDate, setVacDate] = useState("");
   const [vacPaid, setVacPaid] = useState(false);
+  const [vacPartial, setVacPartial] = useState(false);
   const [vacPaidDate, setVacPaidDate] = useState(today());
+  const [vacAmountPaid, setVacAmountPaid] = useState("");
 
   // Deep form
   const [showDeepForm, setShowDeepForm] = useState(false);
   const [editDeep, setEditDeep] = useState<DeepCleanEntry | null>(null);
   const [deepMonth, setDeepMonth] = useState(currentMonth());
   const [deepPaid, setDeepPaid] = useState(false);
+  const [deepPartial, setDeepPartial] = useState(false);
   const [deepPaidDate, setDeepPaidDate] = useState(today());
+  const [deepAmountPaid, setDeepAmountPaid] = useState("");
 
   const showToast = useCallback((msg: string, type: "success" | "error") => {
     setToast({ msg, type });
@@ -602,7 +615,9 @@ function CleaningPage({ isAdmin }: { isAdmin: boolean }) {
     setEditVac(null);
     setVacDate("");
     setVacPaid(false);
+    setVacPartial(false);
     setVacPaidDate(today());
+    setVacAmountPaid("");
     setShowVacForm(true);
   }
 
@@ -610,7 +625,9 @@ function CleaningPage({ isAdmin }: { isAdmin: boolean }) {
     setEditVac(v);
     setVacDate(v.friday_date);
     setVacPaid(v.paid);
+    setVacPartial(v.partial || false);
     setVacPaidDate(v.paid_date || today());
+    setVacAmountPaid(v.remark || "");
     setShowVacForm(true);
   }
 
@@ -620,7 +637,9 @@ function CleaningPage({ isAdmin }: { isAdmin: boolean }) {
     const opts = getDeepCleanMonthOptions(used);
     setDeepMonth(opts[0] || currentMonth());
     setDeepPaid(false);
+    setDeepPartial(false);
     setDeepPaidDate(today());
+    setDeepAmountPaid("");
     setShowDeepForm(true);
   }
 
@@ -628,25 +647,27 @@ function CleaningPage({ isAdmin }: { isAdmin: boolean }) {
     setEditDeep(d);
     setDeepMonth(d.for_month);
     setDeepPaid(d.paid);
+    setDeepPartial(d.partial || false);
     setDeepPaidDate(d.paid_date || today());
+    setDeepAmountPaid(d.remark || "");
     setShowDeepForm(true);
   }
 
   async function saveVacuum() {
     if (!vacDate) { showToast("Please select a Friday date", "error"); return; }
+    const effectivePaid = vacPaid && !vacPartial;
     try {
+      const payload = {
+        friday_date: vacDate,
+        paid: effectivePaid,
+        partial: vacPartial,
+        paid_date: (effectivePaid || vacPartial) ? vacPaidDate : null,
+        remark: vacAmountPaid,
+      };
       if (editVac) {
-        await sb("PATCH", `cleaning_vacuum?id=eq.${editVac.id}`, {
-          friday_date: vacDate,
-          paid: vacPaid,
-          paid_date: vacPaid ? vacPaidDate : null,
-        });
+        await sb("PATCH", `cleaning_vacuum?id=eq.${editVac.id}`, payload);
       } else {
-        await sb("POST", "cleaning_vacuum", {
-          friday_date: vacDate,
-          paid: vacPaid,
-          paid_date: vacPaid ? vacPaidDate : null,
-        });
+        await sb("POST", "cleaning_vacuum", payload);
       }
       showToast(editVac ? "Entry updated" : "Entry added", "success");
       setShowVacForm(false);
@@ -658,19 +679,19 @@ function CleaningPage({ isAdmin }: { isAdmin: boolean }) {
 
   async function saveDeep() {
     if (!deepMonth) { showToast("Please select a month", "error"); return; }
+    const effectivePaid = deepPaid && !deepPartial;
     try {
+      const payload = {
+        for_month: deepMonth,
+        paid: effectivePaid,
+        partial: deepPartial,
+        paid_date: (effectivePaid || deepPartial) ? deepPaidDate : null,
+        remark: deepAmountPaid,
+      };
       if (editDeep) {
-        await sb("PATCH", `cleaning_deepclean?id=eq.${editDeep.id}`, {
-          for_month: deepMonth,
-          paid: deepPaid,
-          paid_date: deepPaid ? deepPaidDate : null,
-        });
+        await sb("PATCH", `cleaning_deepclean?id=eq.${editDeep.id}`, payload);
       } else {
-        await sb("POST", "cleaning_deepclean", {
-          for_month: deepMonth,
-          paid: deepPaid,
-          paid_date: deepPaid ? deepPaidDate : null,
-        });
+        await sb("POST", "cleaning_deepclean", payload);
       }
       showToast(editDeep ? "Entry updated" : "Entry added", "success");
       setShowDeepForm(false);
@@ -680,24 +701,15 @@ function CleaningPage({ isAdmin }: { isAdmin: boolean }) {
     }
   }
 
-  async function toggleVacPaid(v: VacuumEntry) {
+  async function markFullyPaid(id: string, table: string) {
     try {
-      await sb("PATCH", `cleaning_vacuum?id=eq.${v.id}`, {
-        paid: !v.paid,
-        paid_date: !v.paid ? today() : null,
+      await sb("PATCH", `${table}?id=eq.${id}`, {
+        paid: true,
+        partial: false,
+        paid_date: today(),
+        remark: "",
       });
-      load();
-    } catch {
-      showToast("Failed to update", "error");
-    }
-  }
-
-  async function toggleDeepPaid(d: DeepCleanEntry) {
-    try {
-      await sb("PATCH", `cleaning_deepclean?id=eq.${d.id}`, {
-        paid: !d.paid,
-        paid_date: !d.paid ? today() : null,
-      });
+      showToast("Marked as fully paid", "success");
       load();
     } catch {
       showToast("Failed to update", "error");
@@ -722,7 +734,72 @@ function CleaningPage({ isAdmin }: { isAdmin: boolean }) {
   const deepMonthOptions = getDeepCleanMonthOptions(deepMonths, editDeep?.for_month || null);
 
   const paidVacuums = vacuums.filter((v) => v.paid).length;
+  const partialVacuums = vacuums.filter((v) => v.partial).length;
   const paidDeeps = deeps.filter((d) => d.paid).length;
+  const partialDeeps = deeps.filter((d) => d.partial).length;
+
+  // Group vacuums by month
+  const vacuumsByMonth: Record<string, VacuumEntry[]> = {};
+  vacuums.forEach((v) => {
+    const m = v.friday_date.slice(0, 7);
+    if (!vacuumsByMonth[m]) vacuumsByMonth[m] = [];
+    vacuumsByMonth[m].push(v);
+  });
+  const vacuumMonths = Object.keys(vacuumsByMonth).sort((a, b) => b.localeCompare(a));
+
+  // Shared form section for payment status
+  function PaymentStatusFields({
+    paid, onPaid, partial, onPartial, paidDate, onPaidDate, amountPaid, onAmountPaid, rate,
+  }: {
+    paid: boolean; onPaid: (v: boolean) => void;
+    partial: boolean; onPartial: (v: boolean) => void;
+    paidDate: string; onPaidDate: (v: string) => void;
+    amountPaid: string; onAmountPaid: (v: string) => void;
+    rate: number;
+  }) {
+    const amt = Number(amountPaid);
+    return (
+      <>
+        <div style={{ marginBottom: 10 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer", marginBottom: 8 }}>
+            <input type="checkbox" checked={paid && !partial} onChange={(e) => { onPaid(e.target.checked); if (e.target.checked) onPartial(false); }}
+              style={{ width: 18, height: 18, cursor: "pointer", accentColor: c.success }} />
+            <span style={{ fontWeight: 600, fontSize: 14, color: c.success }}>✅ Fully Paid</span>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input type="checkbox" checked={partial} onChange={(e) => { onPartial(e.target.checked); if (e.target.checked) onPaid(false); }}
+              style={{ width: 18, height: 18, cursor: "pointer", accentColor: c.warn }} />
+            <span style={{ fontWeight: 600, fontSize: 14, color: c.warn }}>🟡 Partial Payment</span>
+          </label>
+        </div>
+        {(paid || partial) && (
+          <div style={{ marginBottom: 12 }}>
+            <Lbl>Payment Date</Lbl>
+            <CalendarPicker value={paidDate} onChange={onPaidDate} />
+          </div>
+        )}
+        {partial && (
+          <div style={{ marginBottom: 12 }}>
+            <Lbl>Amount Paid (RM)</Lbl>
+            <input
+              type="number"
+              min="0"
+              max={rate}
+              value={amountPaid}
+              onChange={(e) => onAmountPaid(e.target.value)}
+              placeholder={`e.g. ${rate / 2}`}
+              style={{ ...inp, background: "#ffffff" }}
+            />
+            {amountPaid && !isNaN(amt) && amt > 0 && (
+              <div style={{ fontSize: 12, color: c.muted, marginTop: 4 }}>
+                Balance: RM{rate - amt}
+              </div>
+            )}
+          </div>
+        )}
+      </>
+    );
+  }
 
   return (
     <div style={{ padding: "0 0 40px" }}>
@@ -731,12 +808,18 @@ function CleaningPage({ isAdmin }: { isAdmin: boolean }) {
         <div style={{ ...card, borderTop: `3px solid ${c.accent}` }}>
           <div style={{ fontSize: 12, color: c.muted, fontWeight: 600, marginBottom: 4 }}>VACUUM</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: c.text }}>{paidVacuums}<span style={{ fontSize: 14, color: c.muted, fontWeight: 400 }}>/{vacuums.length}</span></div>
-          <div style={{ fontSize: 12, color: c.muted }}>RM{paidVacuums * VACUUM_RATE} paid</div>
+          <div style={{ fontSize: 12, color: c.muted }}>
+            RM{paidVacuums * VACUUM_RATE} paid
+            {partialVacuums > 0 && <span style={{ color: c.warn }}> · {partialVacuums} partial</span>}
+          </div>
         </div>
         <div style={{ ...card, borderTop: `3px solid ${c.success}` }}>
           <div style={{ fontSize: 12, color: c.muted, fontWeight: 600, marginBottom: 4 }}>DEEP CLEAN</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: c.text }}>{paidDeeps}<span style={{ fontSize: 14, color: c.muted, fontWeight: 400 }}>/{deeps.length}</span></div>
-          <div style={{ fontSize: 12, color: c.muted }}>RM{paidDeeps * DEEPCLEAN_RATE} paid</div>
+          <div style={{ fontSize: 12, color: c.muted }}>
+            RM{paidDeeps * DEEPCLEAN_RATE} paid
+            {partialDeeps > 0 && <span style={{ color: c.warn }}> · {partialDeeps} partial</span>}
+          </div>
         </div>
       </div>
 
@@ -772,29 +855,15 @@ function CleaningPage({ isAdmin }: { isAdmin: boolean }) {
               </h3>
               <div style={{ marginBottom: 12 }}>
                 <Lbl>Friday Date</Lbl>
-                <CalendarPicker
-                  value={vacDate}
-                  onChange={setVacDate}
-                  allowedDates={fridayOptions}
-                />
+                <CalendarPicker value={vacDate} onChange={setVacDate} allowedDates={fridayOptions} />
               </div>
-              <div style={{ marginBottom: 12 }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-                  <input
-                    type="checkbox"
-                    checked={vacPaid}
-                    onChange={(e) => setVacPaid(e.target.checked)}
-                    style={{ width: 18, height: 18, cursor: "pointer", accentColor: c.accent }}
-                  />
-                  <span style={{ fontWeight: 600, fontSize: 14 }}>Paid</span>
-                </label>
-              </div>
-              {vacPaid && (
-                <div style={{ marginBottom: 12 }}>
-                  <Lbl>Payment Date</Lbl>
-                  <CalendarPicker value={vacPaidDate} onChange={setVacPaidDate} />
-                </div>
-              )}
+              <PaymentStatusFields
+                paid={vacPaid} onPaid={setVacPaid}
+                partial={vacPartial} onPartial={setVacPartial}
+                paidDate={vacPaidDate} onPaidDate={setVacPaidDate}
+                amountPaid={vacAmountPaid} onAmountPaid={setVacAmountPaid}
+                rate={VACUUM_RATE}
+              />
               <div style={{ display: "flex", gap: 10 }}>
                 <Btn onClick={saveVacuum}>Save</Btn>
                 <Btn variant="secondary" onClick={() => setShowVacForm(false)}>Cancel</Btn>
@@ -807,39 +876,60 @@ function CleaningPage({ isAdmin }: { isAdmin: boolean }) {
           ) : vacuums.length === 0 ? (
             <EmptyState icon="🧹" text="No vacuum entries yet" />
           ) : (
-            <div style={{ ...card, padding: 0, overflow: "hidden" }}>
-              {vacuums.map((v, idx) => (
-                <div key={v.id} style={{
-                  display: "flex", alignItems: "center", gap: 12, padding: "12px 16px",
-                  borderBottom: idx < vacuums.length - 1 ? `1px solid ${c.border}` : "none",
-                  background: v.paid ? "#f0fdf4" : c.surface,
-                }}>
-                  {/* Checkbox */}
-                  <input
-                    type="checkbox"
-                    checked={v.paid}
-                    onChange={() => isAdmin && toggleVacPaid(v)}
-                    disabled={!isAdmin}
-                    style={{ width: 20, height: 20, cursor: isAdmin ? "pointer" : "default", accentColor: c.success, flexShrink: 0 }}
-                  />
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, fontSize: 14, color: c.text }}>
-                      {fmtDate(v.friday_date)}
-                      {v.paid && v.paid_date && v.paid_date < v.friday_date && (
-                        <Badge label="Advance" color={c.warn} />
-                      )}
-                    </div>
-                    <div style={{ fontSize: 12, color: c.muted, marginTop: 2 }}>
-                      {v.paid ? (v.paid_date ? `Paid on ${fmtDate(v.paid_date)}` : "Paid") : "Unpaid"}
-                      {" · "}RM{VACUUM_RATE}
-                    </div>
+            <div style={{ display: "flex", flexDirection: "column" as const, gap: 16 }}>
+              {vacuumMonths.map((month) => (
+                <div key={month}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: c.muted, letterSpacing: "0.06em", textTransform: "uppercase" as const, marginBottom: 8 }}>
+                    {fmtMonth(month)}
                   </div>
-                  {isAdmin && (
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <Btn size="sm" variant="secondary" onClick={() => openVacEdit(v)}>Edit</Btn>
-                      <Btn size="sm" variant="danger" onClick={() => setConfirm({ id: v.id, table: "cleaning_vacuum" })}>Del</Btn>
-                    </div>
-                  )}
+                  <div style={{ ...card, padding: 0, overflow: "hidden" }}>
+                    {vacuumsByMonth[month].map((v, idx) => (
+                      <div key={v.id} style={{
+                        display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 16px",
+                        borderBottom: idx < vacuumsByMonth[month].length - 1 ? `1px solid ${c.border}` : "none",
+                        background: entryBg(v.paid, v.partial || false),
+                      }}>
+                        <div style={{ paddingTop: 2 }}>
+                          {v.paid
+                            ? <span style={{ fontSize: 18 }}>✅</span>
+                            : v.partial
+                              ? <span style={{ fontSize: 18 }}>🟡</span>
+                              : <span style={{ fontSize: 18, opacity: 0.3 }}>⬜</span>
+                          }
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: 600, fontSize: 14, color: c.text }}>
+                            {fmtDate(v.friday_date)}
+                          </div>
+                          <div style={{ fontSize: 12, color: c.muted, marginTop: 2 }}>
+                            {v.paid ? (v.paid_date ? `Paid on ${fmtDate(v.paid_date)}` : "Fully paid")
+                              : v.partial ? (v.paid_date ? `Partial — ${fmtDate(v.paid_date)}` : "Partial payment")
+                                : "Unpaid"}
+                            {" · "}RM{VACUUM_RATE}
+                          </div>
+                          {v.partial && v.remark && !isNaN(Number(v.remark)) && Number(v.remark) > 0 && (
+                            <div style={{ fontSize: 12, color: c.warn, marginTop: 3, fontWeight: 500 }}>
+                              Paid RM{v.remark}. Balance RM{VACUUM_RATE - Number(v.remark)}.
+                            </div>
+                          )}
+                        </div>
+                        {isAdmin && (
+                          <div style={{ display: "flex", flexDirection: "column" as const, gap: 6, flexShrink: 0 }}>
+                            {v.partial && (
+                              <Btn size="sm" variant="primary" onClick={() => markFullyPaid(v.id, "cleaning_vacuum")}
+                                style={{ background: c.success, whiteSpace: "nowrap" as const }}>
+                                ✅ Paid
+                              </Btn>
+                            )}
+                            <div style={{ display: "flex", gap: 6 }}>
+                              <Btn size="sm" variant="secondary" onClick={() => openVacEdit(v)}>Edit</Btn>
+                              <Btn size="sm" variant="danger" onClick={() => setConfirm({ id: v.id, table: "cleaning_vacuum" })}>Del</Btn>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
@@ -863,30 +953,15 @@ function CleaningPage({ isAdmin }: { isAdmin: boolean }) {
               </h3>
               <div style={{ marginBottom: 12 }}>
                 <Lbl>For Month</Lbl>
-                <CalendarPicker
-                  value={deepMonth}
-                  onChange={setDeepMonth}
-                  monthMode
-                  allowedMonths={deepMonthOptions}
-                />
+                <CalendarPicker value={deepMonth} onChange={setDeepMonth} monthMode allowedMonths={deepMonthOptions} />
               </div>
-              <div style={{ marginBottom: 12 }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
-                  <input
-                    type="checkbox"
-                    checked={deepPaid}
-                    onChange={(e) => setDeepPaid(e.target.checked)}
-                    style={{ width: 18, height: 18, cursor: "pointer", accentColor: c.accent }}
-                  />
-                  <span style={{ fontWeight: 600, fontSize: 14 }}>Paid</span>
-                </label>
-              </div>
-              {deepPaid && (
-                <div style={{ marginBottom: 12 }}>
-                  <Lbl>Payment Date</Lbl>
-                  <CalendarPicker value={deepPaidDate} onChange={setDeepPaidDate} />
-                </div>
-              )}
+              <PaymentStatusFields
+                paid={deepPaid} onPaid={setDeepPaid}
+                partial={deepPartial} onPartial={setDeepPartial}
+                paidDate={deepPaidDate} onPaidDate={setDeepPaidDate}
+                amountPaid={deepAmountPaid} onAmountPaid={setDeepAmountPaid}
+                rate={DEEPCLEAN_RATE}
+              />
               <div style={{ display: "flex", gap: 10 }}>
                 <Btn onClick={saveDeep}>Save</Btn>
                 <Btn variant="secondary" onClick={() => setShowDeepForm(false)}>Cancel</Btn>
@@ -902,33 +977,46 @@ function CleaningPage({ isAdmin }: { isAdmin: boolean }) {
             <div style={{ ...card, padding: 0, overflow: "hidden" }}>
               {deeps.map((d, idx) => (
                 <div key={d.id} style={{
-                  display: "flex", alignItems: "center", gap: 12, padding: "12px 16px",
+                  display: "flex", alignItems: "flex-start", gap: 12, padding: "12px 16px",
                   borderBottom: idx < deeps.length - 1 ? `1px solid ${c.border}` : "none",
-                  background: d.paid ? "#f0fdf4" : c.surface,
+                  background: entryBg(d.paid, d.partial || false),
                 }}>
-                  <input
-                    type="checkbox"
-                    checked={d.paid}
-                    onChange={() => isAdmin && toggleDeepPaid(d)}
-                    disabled={!isAdmin}
-                    style={{ width: 20, height: 20, cursor: isAdmin ? "pointer" : "default", accentColor: c.success, flexShrink: 0 }}
-                  />
+                  <div style={{ paddingTop: 2 }}>
+                    {d.paid
+                      ? <span style={{ fontSize: 18 }}>✅</span>
+                      : d.partial
+                        ? <span style={{ fontSize: 18 }}>🟡</span>
+                        : <span style={{ fontSize: 18, opacity: 0.3 }}>⬜</span>
+                    }
+                  </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontWeight: 600, fontSize: 14, color: c.text }}>
                       {fmtMonth(d.for_month)}
-                      {d.paid && d.paid_date && d.for_month > d.paid_date.slice(0, 7) && (
-                        <span style={{ marginLeft: 6 }}><Badge label="Advance" color={c.warn} /></span>
-                      )}
                     </div>
                     <div style={{ fontSize: 12, color: c.muted, marginTop: 2 }}>
-                      {d.paid ? (d.paid_date ? `Paid on ${fmtDate(d.paid_date)}` : "Paid") : "Unpaid"}
+                      {d.paid ? (d.paid_date ? `Paid on ${fmtDate(d.paid_date)}` : "Fully paid")
+                        : d.partial ? (d.paid_date ? `Partial — ${fmtDate(d.paid_date)}` : "Partial payment")
+                          : "Unpaid"}
                       {" · "}RM{DEEPCLEAN_RATE}
                     </div>
+                    {d.partial && d.remark && !isNaN(Number(d.remark)) && Number(d.remark) > 0 && (
+                      <div style={{ fontSize: 12, color: c.warn, marginTop: 3, fontWeight: 500 }}>
+                        Paid RM{d.remark}. Balance RM{DEEPCLEAN_RATE - Number(d.remark)}.
+                      </div>
+                    )}
                   </div>
                   {isAdmin && (
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <Btn size="sm" variant="secondary" onClick={() => openDeepEdit(d)}>Edit</Btn>
-                      <Btn size="sm" variant="danger" onClick={() => setConfirm({ id: d.id, table: "cleaning_deepclean" })}>Del</Btn>
+                    <div style={{ display: "flex", flexDirection: "column" as const, gap: 6, flexShrink: 0 }}>
+                      {d.partial && (
+                        <Btn size="sm" variant="primary" onClick={() => markFullyPaid(d.id, "cleaning_deepclean")}
+                          style={{ background: c.success, whiteSpace: "nowrap" as const }}>
+                          ✅ Paid
+                        </Btn>
+                      )}
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <Btn size="sm" variant="secondary" onClick={() => openDeepEdit(d)}>Edit</Btn>
+                        <Btn size="sm" variant="danger" onClick={() => setConfirm({ id: d.id, table: "cleaning_deepclean" })}>Del</Btn>
+                      </div>
                     </div>
                   )}
                 </div>
